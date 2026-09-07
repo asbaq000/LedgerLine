@@ -13,7 +13,7 @@ const scheduler = await startScheduler(db, { stripe });
 
 const server = app.listen(config.port, () => {
   const runtime = describeRuntime();
-  console.log(`\n  SaaS Billing Engine  http://localhost:${config.port}`);
+  console.log(`\n  ledgerline           http://localhost:${config.port}`);
   console.log(`  admin dashboard      http://localhost:${config.port}/admin\n`);
   console.log(`  database   ${runtime.database}`);
   console.log(`  stripe     ${runtime.stripe}`);

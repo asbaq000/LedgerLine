@@ -195,6 +195,57 @@ test('cancel-at-period-end lets the period finish, then stops', async () => {
   await db.close();
 });
 
+test('a payment recovers when the provider has no record of the linked invoice', async () => {
+  // Two ways this happens: a real Stripe invoice deleted upstream, and the
+  // offline double after a process restart -- its state is in memory while the
+  // invoice link is in Postgres. `npm run seed && npm start` hits the second
+  // one, and it used to crash the dunning worker with a TypeError, stranding a
+  // debt that was still collectable.
+  const db = await createTestDb();
+  await seedPlans(db);
+  const customer = await createCustomer(db);
+
+  const original = createTestStripe();
+  const { subscription, invoice } = await createSubscription(db, {
+    customerId: customer.id, planId: 'starter', at: T0,
+  });
+  await payAndSettle(db, invoice.id, { stripe: original });
+
+  // A renewal that declines, leaving a failed invoice linked to a provider id.
+  original.__failNextPayment();
+  const renewal = await renewSubscription(db, {
+    subscriptionId: subscription.id,
+    at: Number(subscription.current_period_end),
+  });
+  await payAndSettle(db, renewal.invoice.id, { stripe: original });
+
+  const before = await db.query('SELECT status, stripe_invoice_id FROM invoices WHERE id = $1',
+    [renewal.invoice.id]);
+  assert.equal(before.rows[0].status, 'failed');
+  const staleId = before.rows[0].stripe_invoice_id;
+  assert.ok(staleId, 'linked to a provider invoice');
+
+  // The process restarts: a brand new double that has never heard of staleId.
+  const restarted = createTestStripe();
+  await assert.rejects(
+    restarted.invoices.finalize(staleId),
+    (e) => e.statusCode === 404,
+    'the double reports a missing invoice the way Stripe does, not as a TypeError',
+  );
+
+  // The retry must recover rather than abandon the debt.
+  await payAndSettle(db, renewal.invoice.id, { stripe: restarted });
+
+  const after = await db.query('SELECT status, stripe_invoice_id FROM invoices WHERE id = $1',
+    [renewal.invoice.id]);
+  assert.equal(after.rows[0].status, 'paid', 'collected on the retry');
+  assert.notEqual(after.rows[0].stripe_invoice_id, staleId, 're-linked to a fresh provider invoice');
+
+  const sub = await db.query('SELECT status FROM subscriptions WHERE id = $1', [subscription.id]);
+  assert.equal(sub.rows[0].status, STATES.ACTIVE, 'and the subscription recovered');
+  await db.close();
+});
+
 test('the admin dashboard reports revenue, status and payment health', async () => {
   const db = await createTestDb();
   const stripe = createTestStripe();

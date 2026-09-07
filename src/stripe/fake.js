@@ -121,7 +121,12 @@ export function createFakeStripe({ now = () => Math.floor(Date.now() / 1000) } =
         return invoice;
       },
       async finalize(id) {
+        // Behave like Stripe on an unknown id (404) rather than throwing a
+        // TypeError on undefined. Callers distinguish "this invoice is gone"
+        // from "the provider is broken" by the status code, and the difference
+        // decides whether a debt is recoverable.
         const inv = state.invoices.get(id);
+        if (!inv) throw Object.assign(new Error(`No such invoice: ${id}`), { statusCode: 404 });
         inv.status = 'open';
         emit('invoice.finalized', inv);
         return inv;

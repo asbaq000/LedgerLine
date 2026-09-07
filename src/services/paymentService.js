@@ -47,8 +47,8 @@ export async function payInvoice(db, invoiceId, { stripe } = {}) {
     [invoiceId],
   );
 
-  let stripeInvoiceId = invoice.stripe_invoice_id;
-  if (!stripeInvoiceId) {
+  /** Mint a provider-side invoice for our lines and link it locally. */
+  const createAtProvider = async () => {
     const created = await client.invoices.create({
       customer: stripeCustomerId,
       subscription: invoice.stripe_subscription_id ?? undefined,
@@ -60,19 +60,36 @@ export async function payInvoice(db, invoiceId, { stripe } = {}) {
       })),
       metadata: { local_invoice_id: invoice.id },
     });
-    stripeInvoiceId = created.id;
 
     // Link BEFORE attempting payment. If the process dies between the charge
     // and this write, the resulting webhook would have no local invoice to
     // match and the payment would be invisible.
     await db.query('UPDATE invoices SET stripe_invoice_id = $1 WHERE id = $2', [
-      stripeInvoiceId,
+      created.id,
       invoice.id,
     ]);
-  }
+    return created.id;
+  };
 
-  await client.invoices.finalize(stripeInvoiceId);
-  const result = await client.invoices.pay(stripeInvoiceId);
+  let stripeInvoiceId = invoice.stripe_invoice_id ?? (await createAtProvider());
+
+  let result;
+  try {
+    await client.invoices.finalize(stripeInvoiceId);
+    result = await client.invoices.pay(stripeInvoiceId);
+  } catch (err) {
+    // 404 means the provider has no record of the invoice we are linked to.
+    // Real Stripe returns this when an invoice was deleted upstream; the
+    // offline double returns it after a process restart, because its state is
+    // in memory while ours is in Postgres. Either way the stored link is dead
+    // and the correct recovery is to mint a fresh invoice and try once more --
+    // NOT to abandon a debt we are still owed.
+    if (err.statusCode !== 404) throw err;
+
+    stripeInvoiceId = await createAtProvider();
+    await client.invoices.finalize(stripeInvoiceId);
+    result = await client.invoices.pay(stripeInvoiceId);
+  }
 
   return { stripeInvoiceId, stripeStatus: result.status, attemptCount: result.attempt_count };
 }
