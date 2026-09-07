@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Billing Admin</title>
+<style>
+  :root {
+    --bg: #f7f7f5;
+    --surface: #ffffff;
+    --border: #e3e2de;
+    --ink: #1b1b19;
+    --muted: #6f6e69;
+    --accent: #2f5d50;
+    --ok: #2f6f4f;
+    --warn: #8a6d1f;
+    --bad: #9b3b2f;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a;
+      --surface: #1e2024;
+      --border: #2e3137;
+      --ink: #e9e8e4;
+      --muted: #9a9894;
+      --accent: #7fbfa8;
+      --ok: #7fbf95;
+      --warn: #d6b85c;
+      --bad: #e08272;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .num { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+  header {
+    padding: 22px 28px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  }
+  h1 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
+  .runtime { color: var(--muted); font-size: 12.5px; }
+  .runtime code {
+    background: var(--bg); border: 1px solid var(--border);
+    padding: 1px 6px; border-radius: 5px; font-size: 12px;
+  }
+  main { padding: 24px 28px 60px; max-width: 1180px; margin: 0 auto; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; }
+  .kpi {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 15px 17px;
+  }
+  .kpi .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+  .kpi .value { font-size: 25px; margin-top: 6px; letter-spacing: -0.02em; }
+  .kpi .sub { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+  section { margin-top: 30px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: 0 0 11px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; }
+  tr:last-child td { border-bottom: none; }
+  td.r, th.r { text-align: right; }
+  .pill {
+    display: inline-block; padding: 1px 8px; border-radius: 999px;
+    font-size: 11.5px; border: 1px solid var(--border); background: var(--bg);
+  }
+  .pill.active, .pill.paid, .pill.processed, .pill.succeeded { color: var(--ok); border-color: currentColor; }
+  .pill.past_due, .pill.failed, .pill.pending, .pill.running { color: var(--warn); border-color: currentColor; }
+  .pill.canceled, .pill.stale { color: var(--bad); border-color: currentColor; }
+  .bar { height: 7px; background: var(--bg); border-radius: 999px; overflow: hidden; min-width: 90px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  @media (max-width: 820px) { .grid2 { grid-template-columns: 1fr; } }
+  .empty { padding: 18px 14px; color: var(--muted); font-size: 13.5px; }
+  footer { color: var(--muted); font-size: 12.5px; margin-top: 34px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Billing Admin</h1>
+  <span class="runtime" id="runtime"></span>
+</header>
+
+<main>
+  <div class="kpis" id="kpis"></div>
+
+  <div class="grid2">
+    <section>
+      <h2>Revenue by plan</h2>
+      <div class="card"><div id="revenue"></div></div>
+    </section>
+    <section>
+      <h2>Subscriptions</h2>
+      <div class="card"><div id="statuses"></div></div>
+    </section>
+  </div>
+
+  <section>
+    <h2>Recent invoices</h2>
+    <div class="card"><div id="invoices"></div></div>
+  </section>
+
+  <div class="grid2">
+    <section>
+      <h2>Dunning queue</h2>
+      <div class="card"><div id="dunning"></div></div>
+    </section>
+    <section>
+      <h2>Webhook processing</h2>
+      <div class="card"><div id="webhooks"></div></div>
+    </section>
+  </div>
+
+  <footer id="footer"></footer>
+</main>
+
+<script type="module">
+const money = (cents) => {
+  const n = Number(cents ?? 0);
+  const sign = n < 0 ? '-' : '';
+  return `${sign}$${(Math.abs(n) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+const pct = (x) => `${(Number(x ?? 0) * 100).toFixed(1)}%`;
+const when = (epoch) => (epoch ? new Date(Number(epoch) * 1000).toISOString().slice(0, 10) : '--');
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const pill = (s) => `<span class="pill ${esc(s)}">${esc(s)}</span>`;
+
+const table = (headers, rows) => {
+  if (!rows.length) return '<div class="empty">Nothing yet.</div>';
+  return `<table><thead><tr>${headers.map((h) =>
+    `<th class="${h.right ? 'r' : ''}">${esc(h.label)}</th>`).join('')}</tr></thead>
+    <tbody>${rows.join('')}</tbody></table>`;
+};
+
+async function load() {
+  const [dash, health, invoices, dunning] = await Promise.all([
+    fetch('/admin/dashboard').then((r) => r.json()),
+    fetch('/health').then((r) => r.json()),
+    fetch('/invoices').then((r) => r.json()),
+    fetch('/admin/dunning').then((r) => r.json()),
+  ]);
+
+  document.getElementById('runtime').innerHTML = Object.entries(health.runtime)
+    .map(([k, v]) => `${esc(k)} <code>${esc(v)}</code>`).join(' &nbsp; ');
+
+  const s = dash.subscriptions;
+  document.getElementById('kpis').innerHTML = [
+    { label: 'MRR', value: money(dash.mrr.totalCents), sub: `${s.active + s.past_due} paying subscriptions` },
+    { label: 'Revenue collected', value: money(dash.totalRevenueCents), sub: `${dash.payments.paid} paid invoices` },
+    {
+      label: 'Failed payment rate',
+      value: pct(dash.payments.rate),
+      sub: `${dash.payments.failed} of ${dash.payments.attempted} attempted`,
+    },
+    { label: 'At risk', value: money(dash.dunning.atRiskCents), sub: `${s.past_due} past due` },
+  ].map((k) => `<div class="kpi">
+      <div class="label">${esc(k.label)}</div>
+      <div class="value num">${esc(k.value)}</div>
+      <div class="sub">${esc(k.sub)}</div>
+    </div>`).join('');
+
+  const maxRevenue = Math.max(1, ...dash.revenueByPlan.map((r) => r.revenueCents));
+  document.getElementById('revenue').innerHTML = table(
+    [{ label: 'Plan' }, { label: '' }, { label: 'Revenue', right: true }],
+    dash.revenueByPlan.map((r) => `<tr>
+      <td>${esc(r.planName)}</td>
+      <td><div class="bar"><i style="width:${Math.round((r.revenueCents / maxRevenue) * 100)}%"></i></div></td>
+      <td class="r num">${money(r.revenueCents)}</td>
+    </tr>`),
+  );
+
+  document.getElementById('statuses').innerHTML = table(
+    [{ label: 'Status' }, { label: 'Count', right: true }],
+    ['trialing', 'active', 'past_due', 'paused', 'canceled']
+      .map((k) => `<tr><td>${pill(k)}</td><td class="r num">${s[k]}</td></tr>`),
+  );
+
+  document.getElementById('invoices').innerHTML = table(
+    [{ label: 'Customer' }, { label: 'Status' }, { label: 'Period' }, { label: 'Amount', right: true }],
+    invoices.slice(0, 12).map((i) => `<tr>
+      <td>${esc(i.email)}</td>
+      <td>${pill(i.status)}</td>
+      <td class="num">${when(i.period_start)} &rarr; ${when(i.period_end)}</td>
+      <td class="r num">${money(i.amount_cents)}</td>
+    </tr>`),
+  );
+
+  document.getElementById('dunning').innerHTML = table(
+    [{ label: 'Customer' }, { label: 'Attempt' }, { label: 'Scheduled' }, { label: 'Status' }],
+    dunning.slice(0, 10).map((d) => `<tr>
+      <td>${esc(d.email)}</td>
+      <td class="num">${d.attempt}</td>
+      <td class="num">${when(d.scheduled_for)}</td>
+      <td>${pill(d.status)}</td>
+    </tr>`),
+  );
+
+  const w = dash.webhooks;
+  document.getElementById('webhooks').innerHTML = table(
+    [{ label: 'Outcome' }, { label: 'Count', right: true }],
+    Object.entries(w).map(([k, v]) => `<tr><td>${pill(k)}</td><td class="r num">${v}</td></tr>`),
+  );
+
+  document.getElementById('footer').textContent =
+    `Duplicate and stale counts are the ordering and idempotency guards doing their job. `
+    + `Generated ${new Date(dash.generatedAt * 1000).toLocaleString()}.`;
+}
+
+load().catch((err) => {
+  document.querySelector('main').innerHTML =
+    `<div class="card"><div class="empty">Failed to load: ${esc(err.message)}</div></div>`;
+});
+setInterval(() => load().catch(() => {}), 15000);
+</script>
+</body>
+</html>

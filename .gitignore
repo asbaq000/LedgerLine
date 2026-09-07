@@ -1,0 +1,6 @@
+node_modules/
+.data/
+.scratch/
+.env
+.env.local
+*.log
